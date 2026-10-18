@@ -339,3 +339,63 @@ regression gate: run it before/after any change.
 5. Retrieval recall is high but users complain answers are wrong — where do you
    look?
 6. How do you track and control cost + latency in production?
+
+---
+
+## 8. Productionization (Hour 6)
+
+### 8.1 The service (`lexrag/api/app.py`)
+- **FastAPI** with typed request/response (auto validation + OpenAPI at `/docs`).
+- **Index built once at startup** via `lifespan` — not per request (that would
+  re-embed the whole corpus every call).
+- **Pipeline injected** via a `get_pipeline` dependency so tests swap a stub
+  with `dependency_overrides` — HTTP layer tested with zero network.
+- **`/health`** for k8s/load-balancer probes; graceful store `close()` on
+  shutdown. Verified live: grounded answer + citations + token/cost telemetry;
+  out-of-corpus → refuse; empty question → 422.
+
+### 8.2 Scaling from 10K → 100M chunks (say this as a story)
+1. **Vector store**: embedded local → managed/distributed (Qdrant cluster,
+   pgvector, or a managed service) with **sharding + replication**. Tune HNSW
+   `ef_search` for recall/latency; add **quantization** (PQ / int8) to fit
+   memory.
+2. **Sparse**: in-memory BM25 → **Elasticsearch/OpenSearch** so lexical search
+   scales and filters in-engine.
+3. **Embeddings**: batch + the content-addressed cache; move ingestion to an
+   **async pipeline** (queue + workers) so indexing doesn't block serving.
+4. **Rerank**: the cross-encoder is the latency hot-spot → cap `candidate_k`,
+   batch on GPU, or use a hosted rerank API; make it toggleable per latency SLA.
+5. **Serving**: stateless API replicas behind a load balancer; the index/state
+   lives in the stores, not the process.
+
+### 8.3 Failure modes & mitigations
+- **LLM/API down or slow** → timeouts, retries w/ backoff, circuit breaker,
+  graceful "try later"; stream for perceived latency.
+- **Nothing retrieved** → refuse, don't hallucinate (already enforced).
+- **Stale index** after a doc changes → idempotent re-index by `chunk_id`;
+  invalidate semantic cache (TTL or on-write).
+- **Prompt injection** in retrieved docs ("ignore instructions…") → treat
+  context as data, instruction/content separation, output validation.
+- **Cost blowups** → cap `top_k`/context size, cache, alert on cost per query.
+
+### 8.4 Security / multi-tenant
+- **Access control at retrieval**: filter by the caller's permitted doc set
+  (metadata pre-filter) so users can't retrieve what they can't see.
+- **Per-user cache scoping** so cached answers don't leak across tenants.
+- **PII / data retention** (our GDPR doc is a nod to this): deletion propagates
+  to the index + cache.
+
+### 8.5 Deployment
+- **Dockerfile**: deps layer cached separately from app layer; `OPENAI_API_KEY`
+  injected at runtime (never baked in). `uvicorn` entrypoint.
+- Next steps: CI (run `pytest` + the eval harness as a **quality gate**),
+  health/readiness probes, autoscaling on QPS/latency.
+
+**Interview Qs:**
+1. Walk me through scaling this from 10K to 100M documents.
+2. The LLM API starts timing out intermittently — how does your service behave?
+3. A retrieved document contains "ignore previous instructions" — what happens?
+4. How do you ensure a user only gets answers from documents they're allowed to
+   see?
+5. A document is deleted for GDPR — what has to happen across your system?
+6. How would you deploy this and gate quality in CI?
