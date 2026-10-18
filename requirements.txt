@@ -5,5 +5,12 @@ pydantic-settings==2.16.0
 pydantic==2.14.1
 python-dotenv==1.2.4
 qdrant-client==1.19.1
+rank-bm25==0.2.2
+safetensors==0.8.0
+scikit-learn==1.9.1
+scipy==1.18.1
+sentence-transformers==6.1.0
 tiktoken==0.14.0
+tokenizers==0.23.3
 torch==2.14.1
+transformers==5.20.1
