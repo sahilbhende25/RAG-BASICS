@@ -15,8 +15,8 @@ from lexrag.retrieval.dense import DenseRetriever
 settings = get_settings()
 
 t0 = time.perf_counter()
-store, embedder, n = build_index("data/corpus.jsonl", settings, recreate=True)
-print(f"Indexed {n} chunks in {time.perf_counter() - t0:.2f}s\n")
+store, embedder, chunks = build_index("data/corpus.jsonl", settings, recreate=True)
+print(f"Indexed {len(chunks)} chunks in {time.perf_counter() - t0:.2f}s\n")
 
 retriever = DenseRetriever(store, embedder)
 

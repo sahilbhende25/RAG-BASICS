@@ -10,6 +10,7 @@ from lexrag.embeddings.cache import EmbeddingCache
 from lexrag.embeddings.openai_embedder import OpenAIEmbedder
 from lexrag.ingestion.chunking import chunk_documents
 from lexrag.ingestion.loaders import load_jsonl
+from lexrag.models import Chunk
 from lexrag.stores.qdrant_store import QdrantStore
 
 
@@ -17,8 +18,13 @@ def build_index(
     corpus_path: str,
     settings: Settings,
     recreate: bool = True,
-) -> tuple[QdrantStore, OpenAIEmbedder, int]:
-    """Load, chunk, embed, and upsert a corpus. Returns (store, embedder, n_chunks)."""
+) -> tuple[QdrantStore, OpenAIEmbedder, list[Chunk]]:
+    """Load, chunk, embed, and upsert a corpus.
+
+    Returns (store, embedder, chunks). We return the chunks because the sparse
+    BM25 retriever (Hour 3) indexes the same chunk list in memory, so dense and
+    sparse stay perfectly aligned.
+    """
     docs = load_jsonl(corpus_path)
     chunks = chunk_documents(
         docs,
@@ -33,4 +39,4 @@ def build_index(
     store.ensure_collection(recreate=recreate)
     store.upsert(chunks, vectors)
 
-    return store, embedder, len(chunks)
+    return store, embedder, chunks

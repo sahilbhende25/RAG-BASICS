@@ -165,3 +165,66 @@ budgets match how the model bills/truncates.
 5. Your corpus grows from 10K to 100M chunks. What breaks first, and what do
    you change (sharding, quantization, `ef_search`, disk vs memory)?
 6. Embeddings are idempotent — how do you make *re-indexing* idempotent too?
+
+---
+
+## 5. Advanced retrieval (Hour 3) — the senior-signal hour
+
+### 5.1 Sparse / lexical (BM25)
+- Scores by term frequency × inverse document frequency; great at **exact**
+  tokens (case names, docket numbers, statute sections), blind to synonyms.
+- Complements dense retrieval's exact-match blind spot.
+- Demo: BM25 scored "Nguyen Pacific Logistics" at 1.25 for the right case and
+  **0.00** for everything else — pure keyword precision.
+- Note: our BM25 is in-memory, so filtering is a *post-filter* (vs Qdrant's
+  pre-filter, vs Elasticsearch filtering in-engine).
+
+### 5.2 Hybrid via Reciprocal Rank Fusion (RRF)
+- Dense (cosine ~0-1) and BM25 (unbounded) scores are **non-comparable**, so
+  you can't add them. RRF fuses on **rank, not score**:
+  `score(d) = Σ_retrievers 1/(k + rank_r(d))`, k=60 canonical.
+- Scale-free (no fragile normalization), rewards items ranked well by multiple
+  retrievers, and k dampens top-rank dominance.
+- Pull a **wide** candidate set per retriever before fusing (an item can be #15
+  dense but #2 sparse).
+
+### 5.3 Cross-encoder reranking (retrieve wide, rerank narrow)
+- **Bi-encoder** (our dense retriever): encodes query and chunk *separately* →
+  fast, precomputable, but coarse (they never attend to each other).
+- **Cross-encoder** (reranker): feeds `(query, chunk)` *together* so tokens
+  cross-attend → much more accurate, but must run per candidate at query time
+  (can't score the whole corpus).
+- Pattern: cheap wide retrieval (hybrid, ~top 20-50) → cross-encoder rerank →
+  keep top 3-5 for the LLM.
+- Demo proof: bi-encoder scores were ~0.032 for all three (indistinguishable);
+  the cross-encoder split relevant (+7.0) from irrelevant (−4.2).
+
+### 5.4 Query transformation
+- **Multi-query**: LLM paraphrases the question; retrieve for each; fuse. Fixes
+  vocabulary mismatch ("time off" → "vacation/PTO carryover"). Demo did exactly
+  this rewrite.
+- **HyDE**: LLM writes a *hypothetical answer*, embed THAT (a fake answer sits
+  near real answer passages). Win when queries are short/vague; risk if the LLM
+  hallucinates off-topic.
+- Others: query **decomposition** (split multi-part questions), **step-back**
+  (ask a more general question first).
+
+### 5.5 The full query-time flow now
+```
+query ─► (optional) transform ─► dense ⊕ BM25 ─► RRF fuse ─► cross-encoder rerank ─► top-k
+```
+
+**Latency/cost tradeoffs to say out loud:** every stage adds latency —
+multi-query multiplies retrieval calls + an LLM call; HyDE adds an LLM call on
+the critical path; reranking adds a model inference over N candidates. You tune
+candidate_k and which stages are on vs off per latency budget. Cheapest big
+wins first: hybrid + rerank usually beats fancy query transforms.
+
+**Interview Qs:**
+1. Dense misses an exact docket number that's in the corpus. Why, and which
+   retriever fixes it?
+2. Why can't you just add dense and BM25 scores? How does RRF avoid that?
+3. Bi-encoder vs cross-encoder: the core difference and why you use *both*.
+4. Walk me through "retrieve wide, rerank narrow" and how you pick candidate_k.
+5. What is HyDE and when does it *hurt*?
+6. Your p95 latency is too high. Which retrieval stages do you cut first and why?
