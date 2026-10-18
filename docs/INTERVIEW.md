@@ -228,3 +228,56 @@ wins first: hybrid + rerank usually beats fancy query transforms.
 4. Walk me through "retrieve wide, rerank narrow" and how you pick candidate_k.
 5. What is HyDE and when does it *hurt*?
 6. Your p95 latency is too high. Which retrieval stages do you cut first and why?
+
+---
+
+## 6. Generation & grounding (Hour 4)
+
+### 6.1 Grounding = answer only from retrieved context
+- The whole value of RAG in law is **traceability**: every claim must map to a
+  source. We number contexts `[1][2]...` in the prompt and instruct the model
+  to cite with those markers (`generation/prompts.py`).
+- **Hard guardrail**: if retrieval returns nothing, we **don't call the LLM** —
+  there's nothing to ground on, so any output would be a hallucination. We
+  return "I don't know based on the available documents." Demo proved this on
+  "capital gains tax in Japan" (out of corpus).
+
+### 6.2 Citations are parsed, not trusted
+- After generation we regex the `[n]` markers and map them back to the actual
+  chunks (`extract_citations`). Out-of-range markers (model invents `[99]`) are
+  dropped. Result: a structured, auditable `Answer.citations`.
+
+### 6.3 Anti-hallucination layers (name all of them)
+1. Retrieval quality (hybrid + rerank) — right context in the window.
+2. Strict system instructions — "only use context, don't fabricate."
+3. No-context short-circuit — refuse instead of guessing.
+4. Citation parsing — surfaces *which* passage supports each claim; an answer
+   with zero valid citations is a red flag you can block or flag for review.
+5. (Extension) a verifier pass / NLI check that each sentence is entailed by a
+   cited chunk — this is what RAGAS "faithfulness" measures (Hour 5).
+
+### 6.4 Streaming
+- `Generator.stream()` yields tokens as they arrive. Doesn't reduce total
+  latency, but massively improves **perceived** latency / TTFT in a UI.
+
+### 6.5 Semantic cache
+- Exact-string caches miss paraphrases. A **semantic** cache keys on the query
+  **embedding** and returns a cached answer when cosine ≥ threshold.
+- Demo: exact repeat hit in **~1 ms** vs ~1.4 s cold; a loose paraphrase at
+  threshold 0.95 **missed** and regenerated — the precision/recall knob is the
+  threshold. Too low → stale/wrong answers for merely-related questions.
+- Production concerns: **TTL/invalidation** when the corpus changes, and
+  **per-user scoping** so cached answers don't leak across access permissions.
+
+### 6.6 The full pipeline (`pipeline.py`)
+`cache check → hybrid retrieve → rerank → grounded generate → cache store`,
+with latency measured end-to-end and the query embedding reused for both the
+cache lookup and dense retrieval.
+
+**Interview Qs:**
+1. How do you stop a RAG system from hallucinating? Name the layers.
+2. Retrieval returns nothing — what should generation do, and why?
+3. How do you make answers auditable / attributable?
+4. Exact-match vs semantic cache — tradeoffs and failure modes.
+5. How do you invalidate a semantic cache when a document is updated?
+6. Does streaming reduce latency? What does it actually improve?
