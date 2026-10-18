@@ -20,6 +20,7 @@ from lexrag.generation.prompts import (
     extract_citations,
 )
 from lexrag.models import Answer, ScoredChunk
+from lexrag.obs.cost import estimate_cost
 
 _NO_CONTEXT = "I don't know based on the available documents."
 
@@ -43,11 +44,21 @@ class Generator:
         )
         text = response.output_text.strip()
         citations = extract_citations(text, contexts)
+
+        # Observability: capture token usage + estimated cost. The Responses API
+        # reports input_tokens/output_tokens; guard with getattr for safety.
+        usage = getattr(response, "usage", None)
+        prompt_tokens = int(getattr(usage, "input_tokens", 0) or 0)
+        completion_tokens = int(getattr(usage, "output_tokens", 0) or 0)
+
         return Answer(
             question=question,
             answer=text,
             citations=citations,
             contexts=contexts,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            cost_usd=estimate_cost(self.model, prompt_tokens, completion_tokens),
         )
 
     def stream(self, question: str, contexts: list[ScoredChunk]) -> Iterator[str]:
