@@ -106,4 +106,62 @@ budgets match how the model bills/truncates.
 - Local/open alternatives: `bge`, `e5`, `gte`, Cohere, Voyage. Tradeoff:
   cost/latency/privacy vs quality & ops burden.
 
-(Full section lands in Hour 2 with the vector store.)
+(Expanded below in Hour 2.)
+
+---
+
+## 4. Embeddings, vector search & caching (Hour 2)
+
+### 4.1 Embeddings
+- Map text → vector so semantic similarity = geometric closeness.
+- We use `text-embedding-3-small` (1536-dim). It's **Matryoshka**: you can
+  request fewer `dimensions` (e.g. 512) to shrink the index with modest quality
+  loss — a real cost/latency lever (`OpenAIEmbedder` passes `dimensions`).
+- **Symmetric vs asymmetric**: some models want different prefixes for queries
+  vs passages — that's why `Embedder` has separate `embed_query`/`embed_texts`.
+- Local/open alternatives: `bge`, `e5`, `gte`, Cohere, Voyage. Tradeoff:
+  cost/latency/privacy vs quality & ops burden.
+
+### 4.2 Distance metric
+- We use **cosine** — embeddings encode *direction* (meaning), not magnitude.
+- If vectors are L2-normalized, cosine == dot product (cheaper). 
+
+### 4.3 ANN & HNSW (why search is fast)
+- Exact nearest-neighbor over millions of vectors is O(N) per query — too slow.
+- **HNSW** (Hierarchical Navigable Small World) is a layered proximity graph;
+  search greedily hops toward the query in ~O(log N). It's *approximate*: you
+  trade a little recall for huge speed.
+- Knobs: `M` (graph degree), `ef_construction` (build quality), `ef_search`
+  (recall↔latency at query time). Alternatives: IVF, IVF-PQ (PQ compresses
+  vectors to cut memory at some recall cost).
+
+### 4.4 Metadata filtering (pre- vs post-filter)
+- We denormalized `jurisdiction`/`doc_type` onto chunks (Hour 1), so Qdrant can
+  **pre-filter**: restrict the ANN traversal to matching points in one pass.
+- Post-filtering (retrieve top-k then drop non-matches) is worse: if few of the
+  global top-k match, you can end up with far fewer than k results.
+- See `QdrantStore._build_filter` + `search(filters=...)`.
+
+### 4.5 Idempotent upserts
+- `chunk_id` → deterministic **UUIDv5** point id. Re-indexing the same chunk
+  overwrites rather than duplicates. Critical for incremental re-indexing.
+
+### 4.6 Embedding cache (the cheapest big win)
+- Embeddings are deterministic for `(model, dim, text)`, so we key a persistent
+  disk cache (SQLite via `diskcache`) on `sha256(model|dim|text)`.
+- Warm re-index embeds only changed chunks; duplicate chunks embed once.
+- Demo proof: a cached query vector returned in ~1 ms vs ~1.3 s cold.
+
+### 4.7 Dense retrieval's blind spot
+- Great at semantics ("time off" ~ "vacation"), weak at **exact** tokens
+  (case numbers, names, rare terms). Fix = hybrid search (Hour 3).
+
+**Interview Qs:**
+1. Walk me through what HNSW does and the recall/latency knobs.
+2. Why cosine over Euclidean for text embeddings? When are they equivalent?
+3. Pre-filtering vs post-filtering by metadata — why does post-filtering break
+   top-k, and when is pre-filtering expensive?
+4. Where exactly do you cache in a RAG pipeline, and what's the cache key?
+5. Your corpus grows from 10K to 100M chunks. What breaks first, and what do
+   you change (sharding, quantization, `ef_search`, disk vs memory)?
+6. Embeddings are idempotent — how do you make *re-indexing* idempotent too?
