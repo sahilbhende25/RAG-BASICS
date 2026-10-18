@@ -65,3 +65,7 @@ class Answer(BaseModel):
     contexts: list[ScoredChunk] = Field(default_factory=list)
     latency_ms: float = 0.0
     cached: bool = False
+    # --- Observability (Hour 5): token usage + estimated cost of generation ---
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    cost_usd: float = 0.0

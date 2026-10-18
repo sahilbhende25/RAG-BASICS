@@ -281,3 +281,61 @@ cache lookup and dense retrieval.
 4. Exact-match vs semantic cache — tradeoffs and failure modes.
 5. How do you invalidate a semantic cache when a document is updated?
 6. Does streaming reduce latency? What does it actually improve?
+
+---
+
+## 7. Evaluation & observability (Hour 5)
+
+> "I changed the chunk size and it feels better" is a vibe. A golden set turns
+> it into a number. This hour is what separates mid from senior.
+
+### 7.1 Split quality into two questions
+- **Did we retrieve the right context?** → retrieval metrics (deterministic).
+- **Did we answer faithfully & usefully?** → generation metrics (LLM judge).
+If retrieval is bad, no amount of prompt tuning saves you — so measure both.
+
+### 7.2 Golden set (`data/golden.jsonl`)
+- Hand-labeled `question → relevant_doc_ids (+ expectation: answerable/refuse)`.
+- Even 20-50 examples catch most regressions. Includes an **out-of-corpus**
+  question to test that the system *refuses* instead of hallucinating.
+
+### 7.3 Retrieval metrics (`eval/metrics.py`, no API cost)
+- **hit@k**: did any relevant doc appear in top-k? (coarse)
+- **recall@k**: fraction of relevant docs retrieved. *The* metric for "retrieve
+  wide" — if recall@k is low, reranking can't help (the doc isn't in the set).
+- **precision@k**: fraction of top-k that's relevant. **Low by construction
+  when k ≫ #relevant** — our run showed 0.20 at k=5 with ~1 relevant doc each.
+  Don't panic at low precision@k; read it alongside recall.
+- **MRR**: 1/rank of the first relevant doc — rewards putting the right doc first
+  (what reranking optimizes).
+
+### 7.4 Generation metrics — LLM-as-judge (this is how RAGAS works)
+- **Faithfulness**: is every claim supported by the retrieved context?
+  (catches hallucination). Our run: 1.00.
+- **Answer relevance**: does the answer address the question? Our run: 0.96.
+- **Refusal accuracy**: did it refuse exactly when it should? Our run: 1.00.
+- Caveat to state: the judge is itself an LLM (noisy, can be biased toward
+  verbose answers). Use a strong grader, low temperature, and spot-check.
+
+### 7.5 Observability (`obs/cost.py`, `Answer` fields)
+- Per-query **token usage + $ cost** captured from the Responses API usage and a
+  central price table. Plus **latency** end-to-end. Our run: avg 1757 ms,
+  $0.0028 total for 6 questions + judging.
+- Why it matters: you can't optimize or budget what you don't measure; this is
+  how you justify caching or a cheaper model, and how you alarm on a prompt that
+  ballooned.
+
+### 7.6 The harness (`eval/runner.py`)
+Runs the pipeline over the golden set (cache off so every item exercises the
+full path), aggregates all metrics into one `EvalReport`. This is your
+regression gate: run it before/after any change.
+
+**Interview Qs:**
+1. How do you know your RAG system is *good*? What do you measure, and how?
+2. recall@k vs precision@k — which matters more for the retrieve-wide stage, and
+   why can precision@k look terrible even when retrieval is fine?
+3. What is "faithfulness" and how would you measure it without humans?
+4. Risks of LLM-as-judge, and how do you mitigate them?
+5. Retrieval recall is high but users complain answers are wrong — where do you
+   look?
+6. How do you track and control cost + latency in production?
